@@ -245,3 +245,109 @@ export function openDeepgram() {
   ws.addEventListener("close", () => clearInterval(timer));
   return ws;
 }
+
+// ---------- natural voice (Gemini TTS) ----------
+
+const TTS_MODEL = "gemini-3.8-flash-tts";
+
+export const VOICES = [
+  { id: "Achird", label: "Achird · 친근한 (남)" },
+  { id: "Sulafat", label: "Sulafat · 따뜻한 (여)" },
+  { id: "Zubenelgenubi", label: "Zubenelgenubi · 편안한 (남)" },
+  { id: "Callirrhoe", label: "Callirrhoe · 여유로운 (여)" },
+  { id: "Charon", label: "Charon · 차분히 설명하는 (남)" },
+  { id: "Aoede", label: "Aoede · 산뜻한 (여)" },
+  { id: "Puck", label: "Puck · 밝은 (남)" },
+  { id: "Kore", label: "Kore · 단단한 (여)" },
+];
+
+function pcmToWav(pcm, sampleRate = 24000) {
+  const header = new DataView(new ArrayBuffer(44));
+  const writeStr = (offset, s) => [...s].forEach((c, i) => header.setUint8(offset + i, c.charCodeAt(0)));
+  writeStr(0, "RIFF");
+  header.setUint32(4, 36 + pcm.length, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  header.setUint32(16, 16, true);
+  header.setUint16(20, 1, true); // PCM
+  header.setUint16(22, 1, true); // mono
+  header.setUint32(24, sampleRate, true);
+  header.setUint32(28, sampleRate * 2, true);
+  header.setUint16(32, 2, true);
+  header.setUint16(34, 16, true);
+  writeStr(36, "data");
+  header.setUint32(40, pcm.length, true);
+  return new Blob([header, pcm], { type: "audio/wav" });
+}
+
+function base64ToBytes(b64) {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": keys.gemini },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(geminiError(res.status, err.error?.message || res.statusText));
+  }
+  return res.json();
+}
+
+// Interactions API (current TTS surface): returns WAV in steps[].content[].data.
+async function ttsInteractions(text, voice, style) {
+  const content = { type: "text", text };
+  if (style) content.annotations = [{ type: "speech_metadata", style }];
+  const data = await postJson("https://generativelanguage.googleapis.com/v1beta/interactions", {
+    model: TTS_MODEL,
+    input: [{ type: "user_input", content: [content] }],
+    response_format: { type: "audio" },
+    generation_config: { speech_config: [{ voice }] },
+  });
+  const audio = (data.steps || []).flatMap((s) => s.content || []).filter((c) => c.type === "audio").pop();
+  const b64 = audio?.data || data.output_audio?.data;
+  if (!b64) throw new Error("음성 데이터가 비어 있어요.");
+  const bytes = base64ToBytes(b64);
+  // RIFF header means it is already a WAV file; otherwise it is raw 24kHz PCM.
+  const isWav = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+  return isWav ? new Blob([bytes], { type: "audio/wav" }) : pcmToWav(bytes);
+}
+
+// generateContent with AUDIO output: older TTS surface, returns raw PCM.
+async function ttsGenerateContent(text, voice, style) {
+  const data = await postJson(`${GEMINI_URL}/${TTS_MODEL}:generateContent`, {
+    contents: [{ parts: [{ text: style ? `Say this in a ${style} way: ${text}` : text }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+    },
+  });
+  const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
+  if (!part) throw new Error("음성 데이터가 비어 있어요.");
+  const rate = Number(/rate=(\d+)/.exec(part.inlineData.mimeType || "")?.[1]) || 24000;
+  return pcmToWav(base64ToBytes(part.inlineData.data), rate);
+}
+
+const ttsCache = new Map();
+
+/** Returns a WAV Blob spoken by a natural Gemini voice. Results are cached to save free-tier quota. */
+export async function synthesize(text, { voice = "Achird", slow = false } = {}) {
+  if (!keys.gemini) throw new Error("Gemini 키가 없어요.");
+  const style = slow
+    ? "a natural, friendly job interviewer speaking slowly and clearly"
+    : "a natural, friendly job interviewer in a relaxed conversation";
+  const cacheKey = `${voice}|${slow}|${text}`;
+  if (ttsCache.has(cacheKey)) return ttsCache.get(cacheKey);
+  let blob;
+  try {
+    blob = await ttsInteractions(text, voice, style);
+  } catch (err) {
+    if (/429|한도|키가 올바르지/.test(err.message)) throw err;
+    blob = await ttsGenerateContent(text, voice, style);
+  }
+  ttsCache.set(cacheKey, blob);
+  return blob;
+}

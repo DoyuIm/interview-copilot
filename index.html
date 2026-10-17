@@ -39,6 +39,23 @@
         </div>
         <p class="hint">Gemini 무료 등급은 사용 한도가 있고, 보낸 내용(이력서 포함)을 Google이 서비스 개선에 쓸 수 있어요. 전화번호·주소 같은 개인정보는 지우고 올리세요.</p>
       </div>
+      <div class="card">
+        <h2>읽어 주는 목소리</h2>
+        <p class="hint">“듣기”와 면접관 질문을 읽어 주는 목소리예요. Gemini 목소리는 사람처럼 자연스럽지만 무료 사용량을 조금 써요. 같은 문장은 한 번만 만들어서 다시 쓰고 있어요.</p>
+        <label class="field">방식
+          <select id="voiceEngine">
+            <option value="gemini">Gemini 자연스러운 목소리 (추천)</option>
+            <option value="browser">브라우저 기본 목소리 (무료, 오프라인)</option>
+          </select>
+        </label>
+        <label class="field" id="geminiVoiceRow">목소리
+          <select id="geminiVoice"></select>
+        </label>
+        <label class="field hidden" id="browserVoiceRow">목소리 (Mac이라면 “Premium” 또는 “Enhanced”가 붙은 목소리가 훨씬 자연스러워요)
+          <select id="browserVoice"></select>
+        </label>
+        <button id="previewVoice" class="ghost">미리 듣기</button>
+      </div>
     </section>
 
     <!-- 1. Profile -->
@@ -153,6 +170,8 @@
       </div>
     </section>
   </main>
+
+  <button id="voiceState" class="voice-state hidden" type="button"></button>
 
   <template id="storyTpl">
     <div class="card story">

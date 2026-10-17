@@ -1,4 +1,4 @@
-import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram } from "./ai.js";
+import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES } from "./ai.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -8,14 +8,80 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-function speak(text, slow = false) {
+// ---------- voice playback ----------
+// Default is a Gemini voice (sounds like a person). The browser's built-in voice is the fallback.
+
+const voiceSettings = {
+  get engine() { return read("ic.voiceEngine") || "gemini"; },
+  get geminiVoice() { return read("ic.geminiVoice") || VOICES[0].id; },
+  get browserVoice() { return read("ic.browserVoice"); },
+};
+
+let player = null;
+let speakSeq = 0;
+
+function stopSpeaking() {
+  speakSeq++;
   speechSynthesis.cancel();
+  if (player) {
+    player.pause();
+    URL.revokeObjectURL(player.src);
+    player = null;
+  }
+  setVoiceState("");
+}
+
+function setVoiceState(text) {
+  const el = $("#voiceState");
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+}
+
+function englishVoices() {
+  return speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
+}
+
+// Prefer high-quality system voices (macOS Premium/Enhanced, Edge Natural, Google) over the robotic defaults.
+function bestBrowserVoice() {
+  const voices = englishVoices();
+  const chosen = voices.find((v) => v.name === voiceSettings.browserVoice);
+  if (chosen) return chosen;
+  const rank = (v) =>
+    (/Premium|Enhanced|Natural|Neural/i.test(v.name) ? 4 : 0) +
+    (/Google US English/.test(v.name) ? 3 : 0) +
+    (/Ava|Zoe|Evan|Nathan|Samantha/.test(v.name) ? 1 : 0) +
+    (v.lang === "en-US" ? 1 : 0);
+  return voices.sort((a, b) => rank(b) - rank(a))[0];
+}
+
+function speakWithBrowser(text, slow) {
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "en-US";
-  u.rate = slow ? 0.8 : 0.95;
-  const voice = speechSynthesis.getVoices().find((v) => v.lang === "en-US" && /Samantha|Google US|Ava|Allison/.test(v.name));
+  u.rate = slow ? 0.85 : 1;
+  const voice = bestBrowserVoice();
   if (voice) u.voice = voice;
   speechSynthesis.speak(u);
+}
+
+async function speak(text, slow = false) {
+  stopSpeaking();
+  if (!text?.trim()) return;
+  const seq = speakSeq;
+  if (voiceSettings.engine !== "gemini" || !keys.gemini) return speakWithBrowser(text, slow);
+  setVoiceState("🔊 목소리 준비 중…");
+  try {
+    const blob = await synthesize(text, { voice: voiceSettings.geminiVoice, slow });
+    if (seq !== speakSeq) return; // another playback started or it was stopped meanwhile
+    player = new Audio(URL.createObjectURL(blob));
+    player.onended = () => setVoiceState("");
+    setVoiceState("🔊 재생 중 · 클릭하면 멈춰요");
+    await player.play();
+  } catch (err) {
+    if (seq !== speakSeq) return;
+    setVoiceState(`자연스러운 목소리를 못 불러와서 기본 목소리로 읽어요 (${err.message})`);
+    setTimeout(() => seq === speakSeq && setVoiceState(""), 6000);
+    speakWithBrowser(text, slow);
+  }
 }
 
 let profile = null;
@@ -70,6 +136,32 @@ $("#clearKeys").addEventListener("click", () => {
   renderStatus();
   $("#keyState").textContent = "키를 지웠어요.";
 });
+
+// voice settings
+function fillVoiceSelects() {
+  $("#voiceEngine").value = voiceSettings.engine;
+  $("#geminiVoice").innerHTML = VOICES.map((v) => `<option value="${v.id}">${escapeHtml(v.label)}</option>`).join("");
+  $("#geminiVoice").value = voiceSettings.geminiVoice;
+  const best = bestBrowserVoice();
+  $("#browserVoice").innerHTML = englishVoices()
+    .map((v) => `<option value="${escapeHtml(v.name)}">${escapeHtml(`${v.name} (${v.lang})`)}</option>`)
+    .join("");
+  if (best) $("#browserVoice").value = best.name;
+  $("#geminiVoiceRow").classList.toggle("hidden", voiceSettings.engine !== "gemini");
+  $("#browserVoiceRow").classList.toggle("hidden", voiceSettings.engine === "gemini");
+}
+speechSynthesis.addEventListener?.("voiceschanged", fillVoiceSelects);
+$("#voiceEngine").addEventListener("change", (e) => {
+  write("ic.voiceEngine", e.target.value);
+  fillVoiceSelects();
+});
+$("#geminiVoice").addEventListener("change", (e) => write("ic.geminiVoice", e.target.value));
+$("#browserVoice").addEventListener("change", (e) => write("ic.browserVoice", e.target.value));
+$("#previewVoice").addEventListener("click", () =>
+  speak("Thanks for joining us today. To start, could you tell me a little about yourself and what you're working on right now?"),
+);
+$("#voiceState").addEventListener("click", stopSpeaking);
+fillVoiceSelects();
 
 // ---------- 1. profile ----------
 
@@ -228,7 +320,7 @@ let recording = false;
 
 function startRecording() {
   if (!SR) return alert("이 브라우저는 음성 인식을 지원하지 않아요. Chrome을 쓰거나 답변을 직접 입력해 주세요.");
-  speechSynthesis.cancel();
+  stopSpeaking();
   recog = new SR();
   recog.lang = "en-US";
   recog.continuous = true;
