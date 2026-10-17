@@ -1,5 +1,7 @@
 # Interview Copilot
 
+**바로 쓰기:** https://doyu-portfolio-site.is-a.dev/interview-copilot/
+
 영어 면접을 준비하는 한국어 사용자를 위한 웹앱입니다. 서버 없이 브라우저에서만 동작하고, 각자 자기 API 키를 넣어 씁니다.
 
 1. **내 경험**: 한국어 이력서·포트폴리오(PDF/TXT/MD, 여러 개 가능)를 영어 STAR 스토리와 자기소개로 정리합니다. 원문에 없는 내용은 만들지 않도록 지시되어 있습니다.
@@ -26,10 +28,10 @@
 ```bash
 git clone https://github.com/DoyuIm/interview-copilot.git
 cd interview-copilot
-python3 -m http.server 5178
+python3 -m http.server 5178 -d ..
 ```
 
-Chrome에서 http://localhost:5178 을 엽니다. 마이크는 `localhost`나 `https` 주소에서만 동작합니다.
+Chrome에서 http://localhost:5178/interview-copilot/ 을 엽니다. 페이지가 `/interview-copilot/` 경로를 기준으로 파일을 불러오기 때문에, 저장소의 상위 폴더에서 서버를 띄웁니다. 마이크는 `localhost`나 `https` 주소에서만 동작합니다.
 
 ## 파일 구성
 
