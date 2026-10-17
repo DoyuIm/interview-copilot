@@ -32,6 +32,15 @@ body {
   color: var(--text);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", sans-serif;
 }
+.site-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 20px; background: #0B1220; font-size: 13px;
+}
+.site-logo { color: #F8FAFC; font-weight: 800; letter-spacing: .12em; text-decoration: none; }
+.site-logo span { color: #34D399; }
+.site-links { display: flex; gap: 16px; }
+.site-links a { color: #94A3B8; text-decoration: none; }
+.site-links a:hover { color: #34D399; }
 .top {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
@@ -117,6 +126,12 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margi
 .interim { color: var(--muted); font-style: italic; min-height: 22px; }
 @media (max-width: 600px) {
   .top { padding: 10px 16px; gap: 10px; }
+  .site-bar { padding: 8px 16px; }
+  .site-links a:not(:first-child) { display: none; }
+  .top h1 { width: 100%; }
+  .tabs { width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tab { flex: 0 0 auto; padding: 8px 10px; }
+  .status { margin-left: 0; width: 100%; }
   .question { font-size: 18px; }
   .hint-keywords { font-size: 24px; }
 }
