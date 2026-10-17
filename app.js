@@ -424,7 +424,7 @@ $("#popout").addEventListener("click", async () => {
   const pip = await window.documentPictureInPicture.requestWindow({ width: 460, height: 280 });
   const link = pip.document.createElement("link");
   link.rel = "stylesheet";
-  link.href = new URL("style.css", location.href).href;
+  link.href = new URL("style.css", document.baseURI).href;
   pip.document.head.appendChild(link);
   pip.document.body.style.margin = "0";
   pip.document.body.style.background = "#10141c";
