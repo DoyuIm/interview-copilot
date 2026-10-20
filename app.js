@@ -1,4 +1,4 @@
-import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES } from "./ai.js";
+import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES, onGeminiStatus } from "./ai.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -523,6 +523,9 @@ $("#popout").addEventListener("click", async () => {
   pip.document.body.appendChild(panel);
   pip.addEventListener("pagehide", () => $("#tab-live").insertBefore(panel, $("#tab-live").children[2]));
 });
+
+// Retry progress shows in the same floating pill used for voice playback.
+onGeminiStatus((text) => setVoiceState(text ? `⏳ ${text}` : ""));
 
 // ---------- boot ----------
 

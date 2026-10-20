@@ -1,6 +1,24 @@
 // Runs entirely in the browser: each visitor uses their own Gemini key, stored only in their browser.
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = "gemini-flash-latest";
+// Used when the main model stays overloaded (503) after retries.
+const FALLBACK_MODEL = "gemini-flash-lite-latest";
+const RETRY_DELAYS_MS = [2000, 5000, 10000];
+
+// The page shows progress such as "Gemini is busy, retrying (2/3)…" through this listener.
+let statusListener = () => {};
+export function onGeminiStatus(fn) {
+  statusListener = fn;
+}
+
+const sleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
 
 export const keys = {
   get gemini() { return read("ic.geminiKey"); },
@@ -112,24 +130,45 @@ OPENER: <one short English sentence the candidate can start with>`;
 // ---------- Gemini REST ----------
 
 function geminiError(status, message) {
+  if (status === 503 || status === 500) return "Gemini 서버가 지금 너무 붐벼요. 몇 분 뒤 다시 시도해 주세요. (내 키나 파일 문제는 아니에요)";
   if (status === 429) return "Gemini 무료 사용량 한도에 걸렸어요. 1분쯤 기다렸다가 다시 시도하세요. 하루 한도라면 내일 다시 쓸 수 있어요.";
   if (/API_KEY_INVALID|API key not valid/.test(message)) return "Gemini API 키가 올바르지 않아요. 설정 탭에서 키를 다시 확인하세요.";
   return `Gemini 오류 ${status}: ${message}`;
 }
 
+// 500/503 mean Google's side is busy, not that the request is wrong: retry with backoff,
+// then try a lighter model once before giving up.
 async function callGemini(method, body, signal) {
   if (!keys.gemini) throw new Error("먼저 ‘⚙ 설정’ 탭에서 Gemini API 키를 넣어 주세요.");
-  const res = await fetch(`${GEMINI_URL}/${MODEL}:${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": keys.gemini },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) {
+  const plan = [...RETRY_DELAYS_MS.map((delay) => ({ model: MODEL, delay })), { model: FALLBACK_MODEL, delay: 2000 }];
+  let attempt = 0;
+  for (;;) {
+    const model = attempt === 0 ? MODEL : plan[attempt - 1].model;
+    const res = await fetch(`${GEMINI_URL}/${model}:${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": keys.gemini },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (res.ok) {
+      statusListener("");
+      return res;
+    }
     const err = await res.json().catch(() => ({}));
-    throw new Error(geminiError(res.status, err.error?.message || res.statusText));
+    const busy = res.status === 503 || res.status === 500;
+    if (!busy || attempt >= plan.length) {
+      statusListener("");
+      throw new Error(geminiError(res.status, err.error?.message || res.statusText));
+    }
+    const next = plan[attempt];
+    statusListener(
+      next.model === MODEL
+        ? `Gemini가 붐벼서 ${next.delay / 1000}초 뒤 다시 시도해요 (${attempt + 1}/${RETRY_DELAYS_MS.length})`
+        : "계속 붐벼서 가벼운 모델로 바꿔 시도해요",
+    );
+    await sleep(next.delay, signal);
+    attempt++;
   }
-  return res;
 }
 
 function textOf(chunk) {
