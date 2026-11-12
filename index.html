@@ -153,9 +153,18 @@
       <div class="card notice">
         <strong>사용 전에 확인하세요.</strong>
         실제 면접에서 이런 도구를 쓰는 것을 금지하는 회사가 많아요. 면접 안내문의 규정을 먼저 확인하세요.
-        이 모드는 대본을 주지 않고, 미리 준비한 <em>내 스토리</em>를 떠올릴 키워드만 보여줘요.
+        이 모드는 대본 대신, 미리 정리한 <em>내 경험</em>에서 뽑은 핵심 포인트 3줄만 보여줘요. 읽지 말고 보고 내 말로 답하세요.
       </div>
       <div class="card">
+        <div class="row">
+          <label class="inline">면접 언어
+            <select id="liveLang">
+              <option value="ko">한국어</option>
+              <option value="en">영어</option>
+            </select>
+          </label>
+          <label class="inline"><input type="checkbox" id="listenMe" checked /> 내 답변도 듣기 (꼬리 질문 대응)</label>
+        </div>
         <div class="row">
           <button id="liveStart" class="primary">오디오 연결 시작</button>
           <button id="liveStop" class="ghost" disabled>중지</button>
@@ -163,12 +172,16 @@
           <button id="forceHint" class="ghost" disabled>지금 힌트 (Space)</button>
         </div>
         <p class="hint">시작을 누르면 공유할 대상을 고르는 창이 떠요. Zoom이나 Google Meet이 열린 <b>Chrome 탭</b>을 선택하고 <b>“탭 오디오도 공유”</b>를 꼭 켜세요. 데스크톱 Zoom 앱이라면 “전체 화면”을 고르고 “시스템 오디오 공유”를 켜세요.</p>
+        <p class="hint">“내 답변도 듣기”를 켜면 마이크로 내 답변도 자막으로 남겨서, 꼬리 질문이 나오면 방금 내가 한 말에 이어지는 포인트를 보여줘요. 이때는 <b>이어폰</b>을 끼세요. 스피커로 들으면 면접관 목소리가 내 마이크에도 들어가요.</p>
       </div>
 
       <div id="hintPanel" class="hint-panel">
-        <div id="hintQ" class="hint-q">질문을 기다리는 중…</div>
+        <div class="hint-head">
+          <span id="hintType" class="hint-type hidden"></span>
+          <span id="hintQ" class="hint-q">질문을 기다리는 중…</span>
+        </div>
         <div id="hintStory" class="hint-story"></div>
-        <div id="hintKeywords" class="hint-keywords"></div>
+        <ol id="hintPoints" class="hint-points"></ol>
         <div id="hintOpener" class="hint-opener"></div>
       </div>
 

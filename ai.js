@@ -116,16 +116,39 @@ Use exactly these sections, as plain text with the headings shown:
 ## 이렇게 말해 보세요
 (A better English answer the candidate can actually say: 60-90 seconds, short sentences, B1-B2 words, based ONLY on the candidate's real stories in the profile. Name the story id you used in brackets at the start.)`;
 
-const LIVE_SYSTEM = `You watch a live English job interview transcript and give the candidate a tiny memory cue.
-The candidate already prepared the stories in their profile. Your job is to point to the right one, not to write a script.
+// Lines in the live transcript start with these labels.
+export const SPEAKER = { interviewer: "면접관", me: "나" };
 
-If the latest interviewer utterance is not a question or request (small talk, "okay", "great", an unfinished sentence), output exactly: SKIP
+function liveSystem(lang) {
+  const interviewLang = lang === "ko" ? "Korean" : "English";
+  const outputStyle =
+    lang === "ko"
+      ? "natural spoken Korean (해요체 or 습니다체), short phrases"
+      : "simple spoken English (CEFR B1-B2), short phrases";
+  return `You help a job candidate during a live video interview held in ${interviewLang}.
+You see the recent transcript, where lines start with "${SPEAKER.interviewer}:" (interviewer) or "${SPEAKER.me}:" (the candidate), and the candidate's real experience profile.
+Your output is a cue sheet the candidate glances at for two seconds and then answers in their own words. It is not a script.
 
-Otherwise output exactly these lines and nothing else:
+First decide what the latest interviewer utterance is:
+- Not a question or request (small talk, "okay", thanks, an unfinished sentence): output exactly SKIP
+- A new question, or a follow-up (꼬리 질문) that digs into what the candidate just said.
+
+Rules:
+- Use only facts from the profile and from what the candidate already said. Never invent numbers, names, tools or outcomes.
+- For a follow-up, answer the specific thing asked. Do not restart the whole story; P1 answers it directly.
+- If the profile does not contain what is asked, say so in P3 and suggest an honest angle (what you would do, or what you learned).
+
+Output exactly these lines and nothing else:
 Q: <the question restated in simple Korean, max 15 words>
-STORY: <story id> | <story title_ko>   (or "STORY: pitch" for tell-me-about-yourself, or "STORY: none" if no story fits)
-KEYWORDS: <3-5 English cue words separated by " · ">
-OPENER: <one short English sentence the candidate can start with>`;
+TYPE: <새 질문 or 꼬리 질문>
+STORY: <story id> | <story title_ko>   (or "pitch" for self-introduction, or "none")
+P1: <first point: the situation, or the direct answer for a follow-up; max 15 words>
+P2: <second point: what I did; max 15 words>
+P3: <third point: result, number or lesson; max 15 words>
+OPENER: <one short natural sentence to start the answer>
+
+Write P1, P2, P3 and OPENER in ${outputStyle}.`;
+}
 
 // ---------- Gemini REST ----------
 
@@ -254,11 +277,11 @@ export function getFeedback(profile, { question, answer }, onText) {
   );
 }
 
-export function getHint(profile, { utterance, context = "" }, onText, signal) {
+export function getHint(profile, { utterance, context = "", lang = "ko" }, onText, signal) {
   return streamText(
     {
-      system: [LIVE_SYSTEM, profileContext(profile)],
-      prompt: `Recent transcript:\n${context || "(start of interview)"}\n\nLatest interviewer utterance:\n${utterance}`,
+      system: [liveSystem(lang), profileContext(profile)],
+      prompt: `Recent transcript:\n${context || "(start of interview)"}\n\nLatest interviewer utterance:\n${SPEAKER.interviewer}: ${utterance}`,
     },
     onText,
     signal,
@@ -267,10 +290,11 @@ export function getHint(profile, { utterance, context = "" }, onText, signal) {
 
 // ---------- Deepgram (live mode) ----------
 
-export function openDeepgram() {
+// Korean uses nova-2, which has supported Korean the longest; English uses nova-3.
+export function openDeepgram(lang = "en") {
   const params = new URLSearchParams({
-    model: "nova-3",
-    language: "en",
+    model: lang === "ko" ? "nova-2" : "nova-3",
+    language: lang,
     smart_format: "true",
     interim_results: "true",
     endpointing: "400",

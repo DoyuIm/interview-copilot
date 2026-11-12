@@ -1,4 +1,4 @@
-import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES, onGeminiStatus } from "./ai.js";
+import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES, onGeminiStatus, SPEAKER } from "./ai.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -374,52 +374,84 @@ $("#feedbackBtn").addEventListener("click", async () => {
 });
 
 // ---------- 3. live hints ----------
+// Two audio channels: the interview tab (interviewer) and, optionally, my mic (me).
+// Only the interviewer's finished utterances ask for a hint; my lines give follow-ups their context.
 
-let liveStream = null;
-let recorder = null;
-let sttSocket = null;
-let utteranceParts = [];
-const history = [];
+const channels = []; // { speaker, stream, socket, recorder, parts }
+const history = []; // { speaker, text }
 let hintAbort = null;
 
-function addTranscript(text) {
-  history.push(text);
+const liveLang = () => $("#liveLang").value;
+$("#liveLang").value = read("ic.liveLang") || "ko";
+$("#liveLang").addEventListener("change", (e) => write("ic.liveLang", e.target.value));
+
+function addTranscript(speaker, text) {
+  history.push({ speaker, text });
   const p = document.createElement("p");
-  p.textContent = text;
+  const who = document.createElement("b");
+  who.textContent = `${speaker}: `;
+  who.className = speaker === SPEAKER.me ? "me" : "them";
+  p.append(who, text);
   $("#transcript").appendChild(p);
   $("#transcript").scrollTop = $("#transcript").scrollHeight;
 }
 
-function finalizeUtterance() {
-  const text = utteranceParts.join(" ").trim();
-  utteranceParts = [];
-  $("#interim").textContent = "";
+function showInterim() {
+  $("#interim").textContent = channels
+    .map((c) => (c.interim ? `${c.speaker}: ${c.interim}` : ""))
+    .filter(Boolean)
+    .join("  ·  ");
+}
+
+function finalizeUtterance(channel) {
+  const text = channel.parts.join(" ").trim();
+  channel.parts = [];
+  channel.interim = "";
+  showInterim();
   if (!text) return;
-  addTranscript(text);
-  if (text.split(/\s+/).length >= 3) requestHint(text);
+  addTranscript(channel.speaker, text);
+  // Korean questions can be short ("자기소개 해 주세요"), so count characters too.
+  if (channel.speaker === SPEAKER.interviewer && (text.split(/\s+/).length >= 3 || text.length >= 8)) requestHint(text);
+}
+
+function renderHint(t) {
+  const get = (key) => (t.match(new RegExp(`^${key}:\\s*(.*)$`, "m")) || [])[1]?.trim() || "";
+  const type = get("TYPE");
+  $("#hintType").textContent = type;
+  $("#hintType").classList.toggle("hidden", !type);
+  $("#hintType").classList.toggle("follow", type.includes("꼬리"));
+  $("#hintQ").textContent = get("Q");
+  const story = get("STORY");
+  $("#hintStory").textContent = story && story !== "none" ? `📌 ${story}` : "";
+  $("#hintPoints").innerHTML = ["P1", "P2", "P3"]
+    .map(get)
+    .filter(Boolean)
+    .map((p) => `<li>${escapeHtml(p)}</li>`)
+    .join("");
+  $("#hintOpener").textContent = get("OPENER") ? `“${get("OPENER")}”` : "";
 }
 
 async function requestHint(utterance) {
   hintAbort?.abort();
   hintAbort = new AbortController();
-  const context = history.slice(-7, -1).join("\n");
+  // Everything said before this question, both speakers, so follow-ups know my last answer.
+  const context = history
+    .slice(-13, -1)
+    .map((h) => `${h.speaker}: ${h.text}`)
+    .join("\n");
   let shown = false;
   try {
     await getHint(
       profile,
-      { utterance, context },
+      { utterance, context, lang: liveLang() },
       (t) => {
         if (t.trim().startsWith("SKIP")) return;
-        const get = (key) => (t.match(new RegExp(`^${key}:\\s*(.*)$`, "m")) || [])[1] || "";
-        if (!shown && get("Q")) {
+        if (!/^Q:/m.test(t)) return;
+        if (!shown) {
           shown = true;
-          for (const id of ["#hintStory", "#hintKeywords", "#hintOpener"]) $(id).textContent = "";
+          renderHint("");
         }
-        if (!shown) return;
-        $("#hintQ").textContent = get("Q");
-        $("#hintStory").textContent = get("STORY") ? `📌 ${get("STORY")}` : "";
-        $("#hintKeywords").textContent = get("KEYWORDS");
-        $("#hintOpener").textContent = get("OPENER") ? `“${get("OPENER")}”` : "";
+        renderHint(t);
       },
       hintAbort.signal,
     );
@@ -428,68 +460,94 @@ async function requestHint(utterance) {
   }
 }
 
+function openChannel(speaker, track) {
+  const channel = { speaker, stream: new MediaStream([track]), socket: openDeepgram(liveLang()), recorder: null, parts: [], interim: "" };
+  const { socket } = channel;
+  socket.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "Error" || msg.err_msg) return ($("#hintQ").textContent = `음성인식 오류: ${msg.message || msg.err_msg}`);
+    if (msg.type === "UtteranceEnd") return finalizeUtterance(channel);
+    if (msg.type !== "Results") return;
+    const text = msg.channel?.alternatives?.[0]?.transcript || "";
+    if (msg.is_final) {
+      if (text) channel.parts.push(text);
+      channel.interim = channel.parts.join(" ");
+      showInterim();
+      if (msg.speech_final) finalizeUtterance(channel);
+    } else {
+      channel.interim = `${channel.parts.join(" ")} ${text}`.trim();
+      showInterim();
+    }
+  };
+  socket.onopen = () => {
+    channel.recorder = new MediaRecorder(channel.stream, { mimeType: "audio/webm;codecs=opus" });
+    channel.recorder.ondataavailable = (e) => e.data.size && socket.readyState === WebSocket.OPEN && socket.send(e.data);
+    channel.recorder.start(250);
+  };
+  socket.onclose = (e) => {
+    if (!channels.includes(channel)) return;
+    stopLive();
+    // 1006 / 1008 / 4xxx: Deepgram rejected the key or the request.
+    if (e.code !== 1000) $("#hintQ").textContent = `음성인식 연결이 끊겼어요 (${e.code}). 설정 탭에서 Deepgram 키를 확인하세요.`;
+  };
+  channels.push(channel);
+  return channel;
+}
+
 $("#liveStart").addEventListener("click", async () => {
   if (!profile) return alert("먼저 ‘1. 내 경험’에서 스토리를 만들어 주세요.");
   if (!keys.gemini || !keys.deepgram) {
     showTab("settings");
     return alert("실시간 모드에는 Gemini 키와 Deepgram 키가 모두 필요해요. 설정 탭에서 넣어 주세요.");
   }
+  let tabStream;
   try {
-    liveStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    tabStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
   } catch {
     return;
   }
-  const audioTracks = liveStream.getAudioTracks();
-  if (!audioTracks.length) {
-    liveStream.getTracks().forEach((t) => t.stop());
-    return alert("오디오가 공유되지 않았어요. 다시 시작해서 ‘탭 오디오 공유’를 켜 주세요.");
-  }
+  const [tabAudio] = tabStream.getAudioTracks();
   // Only audio is needed; drop the video track right away.
-  liveStream.getVideoTracks().forEach((t) => t.stop());
-  audioTracks[0].addEventListener("ended", stopLive);
+  tabStream.getVideoTracks().forEach((t) => t.stop());
+  if (!tabAudio) return alert("오디오가 공유되지 않았어요. 다시 시작해서 ‘탭 오디오 공유’를 켜 주세요.");
+  tabAudio.addEventListener("ended", stopLive);
 
-  sttSocket = openDeepgram();
-  sttSocket.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === "Error" || msg.err_msg) return ($("#hintQ").textContent = `음성인식 오류: ${msg.message || msg.err_msg}`);
-    if (msg.type === "UtteranceEnd") return finalizeUtterance();
-    if (msg.type !== "Results") return;
-    const text = msg.channel?.alternatives?.[0]?.transcript || "";
-    if (msg.is_final) {
-      if (text) utteranceParts.push(text);
-      $("#interim").textContent = utteranceParts.join(" ");
-      if (msg.speech_final) finalizeUtterance();
-    } else {
-      $("#interim").textContent = `${utteranceParts.join(" ")} ${text}`;
+  let micAudio = null;
+  if ($("#listenMe").checked) {
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      [micAudio] = micStream.getAudioTracks();
+    } catch {
+      $("#hintQ").textContent = "마이크를 못 써서 면접관 소리만 들어요. 꼬리 질문 힌트가 덜 정확할 수 있어요.";
     }
-  };
-  sttSocket.onopen = () => {
-    recorder = new MediaRecorder(new MediaStream(audioTracks), { mimeType: "audio/webm;codecs=opus" });
-    recorder.ondataavailable = (e) => e.data.size && sttSocket.readyState === WebSocket.OPEN && sttSocket.send(e.data);
-    recorder.start(250);
-    $("#hintQ").textContent = "듣는 중… 면접관의 질문을 기다리고 있어요.";
-  };
-  sttSocket.onclose = (e) => {
-    if (!recorder) return;
-    stopLive();
-    // 1008 / 4xxx: Deepgram rejected the key or the request.
-    if (e.code !== 1000) $("#hintQ").textContent = `음성인식 연결이 끊겼어요 (${e.code}). 설정 탭에서 Deepgram 키를 확인하세요.`;
-  };
+  }
+
+  openChannel(SPEAKER.interviewer, tabAudio);
+  if (micAudio) openChannel(SPEAKER.me, micAudio);
+  renderHint("");
+  $("#hintQ").textContent = `듣는 중… (${liveLang() === "ko" ? "한국어" : "영어"}) 면접관의 질문을 기다리고 있어요.`;
 
   $("#liveStart").disabled = true;
+  $("#liveLang").disabled = true;
+  $("#listenMe").disabled = true;
   $("#liveStop").disabled = false;
   $("#forceHint").disabled = false;
   $("#popout").disabled = !("documentPictureInPicture" in window);
 });
 
 function stopLive() {
-  recorder?.state === "recording" && recorder.stop();
-  recorder = null;
-  liveStream?.getTracks().forEach((t) => t.stop());
-  liveStream = null;
-  if (sttSocket?.readyState === WebSocket.OPEN) sttSocket.close();
-  sttSocket = null;
+  const closing = channels.splice(0);
+  for (const c of closing) {
+    if (c.recorder?.state === "recording") c.recorder.stop();
+    c.stream.getTracks().forEach((t) => t.stop());
+    if (c.socket.readyState === WebSocket.OPEN) c.socket.close();
+  }
+  hintAbort?.abort();
   $("#liveStart").disabled = false;
+  $("#liveLang").disabled = false;
+  $("#listenMe").disabled = false;
   $("#liveStop").disabled = true;
   $("#forceHint").disabled = true;
   $("#hintQ").textContent = "중지됨";
@@ -498,9 +556,10 @@ function stopLive() {
 $("#liveStop").addEventListener("click", stopLive);
 
 function forceHint() {
-  const pending = utteranceParts.join(" ").trim();
-  if (pending) finalizeUtterance();
-  else if (history.length) requestHint(history[history.length - 1]);
+  const interviewer = channels.find((c) => c.speaker === SPEAKER.interviewer);
+  if (interviewer?.parts.length) return finalizeUtterance(interviewer);
+  const last = [...history].reverse().find((h) => h.speaker === SPEAKER.interviewer);
+  if (last) requestHint(last.text);
 }
 $("#forceHint").addEventListener("click", forceHint);
 document.addEventListener("keydown", (e) => {
