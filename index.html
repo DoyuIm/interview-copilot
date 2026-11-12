@@ -26,6 +26,12 @@
       <button class="tab" data-tab="practice">2. 연습 모드</button>
       <button class="tab" data-tab="live">3. 실시간 모드</button>
     </nav>
+    <label class="inline lang-pick">면접 언어
+      <select id="lang">
+        <option value="ko">한국어</option>
+        <option value="en">영어</option>
+      </select>
+    </label>
     <div id="status" class="status"></div>
   </header>
 
@@ -92,12 +98,19 @@
       <div id="profileView" class="hidden">
         <div class="card">
           <div class="row-between">
-            <h2>자기소개 (Tell me about yourself)</h2>
-            <button class="ghost speak" data-speak="pitch_en">듣기</button>
+            <h2 id="pitchTitle">자기소개</h2>
+            <button id="speakPitch" class="ghost speak">듣기</button>
           </div>
           <p class="muted" id="roleLine"></p>
-          <textarea id="pitchEn" rows="5" class="en"></textarea>
-          <details><summary>한국어 해석</summary><p id="pitchKo"></p></details>
+          <textarea id="pitch" rows="5" class="en"></textarea>
+          <details><summary id="pitchOtherLabel">다른 언어 버전</summary><p id="pitchOther"></p></details>
+        </div>
+        <div id="koMissing" class="card notice hidden">
+          이 스토리들은 한국어 답변이 생기기 전에 만들어져서 한국어 답변이 비어 있어요.
+          <div class="row">
+            <button id="makeKo" class="primary">한국어 답변 만들기</button>
+            <span id="koState" class="muted"></span>
+          </div>
         </div>
         <div id="stories"></div>
         <button id="saveProfile" class="primary">수정 내용 저장</button>
@@ -157,12 +170,7 @@
       </div>
       <div class="card">
         <div class="row">
-          <label class="inline">면접 언어
-            <select id="liveLang">
-              <option value="ko">한국어</option>
-              <option value="en">영어</option>
-            </select>
-          </label>
+          <span class="muted">면접 언어는 맨 위에서 고를 수 있어요.</span>
           <label class="inline"><input type="checkbox" id="listenMe" checked /> 내 답변도 듣기 (꼬리 질문 대응)</label>
         </div>
         <div class="row">
@@ -204,7 +212,7 @@
       <p class="title muted"></p>
       <div class="kw"></div>
       <label class="field">말할 답변 (수정 가능)
-        <textarea class="answer-en en" rows="6"></textarea>
+        <textarea class="answer en" rows="6"></textarea>
       </label>
       <details>
         <summary>STAR 상세 · 어울리는 질문</summary>

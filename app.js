@@ -1,4 +1,4 @@
-import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES, onGeminiStatus, SPEAKER } from "./ai.js";
+import { keys, read, write, buildProfile, askQuestion, getFeedback, getHint, openDeepgram, synthesize, VOICES, onGeminiStatus, SPEAKER, addKoreanAnswers } from "./ai.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -37,26 +37,26 @@ function setVoiceState(text) {
   el.classList.toggle("hidden", !text);
 }
 
-function englishVoices() {
-  return speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
+function languageVoices() {
+  return speechSynthesis.getVoices().filter((v) => v.lang.startsWith(lang()));
 }
 
 // Prefer high-quality system voices (macOS Premium/Enhanced, Edge Natural, Google) over the robotic defaults.
 function bestBrowserVoice() {
-  const voices = englishVoices();
+  const voices = languageVoices();
   const chosen = voices.find((v) => v.name === voiceSettings.browserVoice);
   if (chosen) return chosen;
   const rank = (v) =>
     (/Premium|Enhanced|Natural|Neural/i.test(v.name) ? 4 : 0) +
     (/Google US English/.test(v.name) ? 3 : 0) +
-    (/Ava|Zoe|Evan|Nathan|Samantha/.test(v.name) ? 1 : 0) +
-    (v.lang === "en-US" ? 1 : 0);
+    (/Ava|Zoe|Evan|Nathan|Samantha|Yuna|Jian|Sora/.test(v.name) ? 1 : 0) +
+    (v.lang === speechLang() ? 1 : 0);
   return voices.sort((a, b) => rank(b) - rank(a))[0];
 }
 
 function speakWithBrowser(text, slow) {
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-US";
+  u.lang = speechLang();
   u.rate = slow ? 0.85 : 1;
   const voice = bestBrowserVoice();
   if (voice) u.voice = voice;
@@ -85,6 +85,11 @@ async function speak(text, slow = false) {
 }
 
 let profile = null;
+
+// One interview language for every tab: what stories show, what the practice interviewer speaks, what live mode hears.
+// Older pages saved only the live-mode choice, so fall back to it.
+const lang = () => read("ic.lang") || read("ic.liveLang") || "ko";
+const speechLang = () => (lang() === "ko" ? "ko-KR" : "en-US");
 
 function loadProfile() {
   try {
@@ -143,7 +148,7 @@ function fillVoiceSelects() {
   $("#geminiVoice").innerHTML = VOICES.map((v) => `<option value="${v.id}">${escapeHtml(v.label)}</option>`).join("");
   $("#geminiVoice").value = voiceSettings.geminiVoice;
   const best = bestBrowserVoice();
-  $("#browserVoice").innerHTML = englishVoices()
+  $("#browserVoice").innerHTML = languageVoices()
     .map((v) => `<option value="${escapeHtml(v.name)}">${escapeHtml(`${v.name} (${v.lang})`)}</option>`)
     .join("");
   if (best) $("#browserVoice").value = best.name;
@@ -158,7 +163,11 @@ $("#voiceEngine").addEventListener("change", (e) => {
 $("#geminiVoice").addEventListener("change", (e) => write("ic.geminiVoice", e.target.value));
 $("#browserVoice").addEventListener("change", (e) => write("ic.browserVoice", e.target.value));
 $("#previewVoice").addEventListener("click", () =>
-  speak("Thanks for joining us today. To start, could you tell me a little about yourself and what you're working on right now?"),
+  speak(
+    lang() === "ko"
+      ? "오늘 시간 내 주셔서 감사합니다. 먼저 간단하게 자기소개 부탁드릴게요."
+      : "Thanks for joining us today. To start, could you tell me a little about yourself and what you're working on right now?",
+  ),
 );
 $("#voiceState").addEventListener("click", stopSpeaking);
 fillVoiceSelects();
@@ -219,8 +228,13 @@ function renderProfile() {
   if (!profile) return;
   $("#profileView").classList.remove("hidden");
   $("#roleLine").textContent = `지원 직무: ${profile.target_role}`;
-  $("#pitchEn").value = profile.pitch_en;
-  $("#pitchKo").textContent = profile.pitch_ko;
+  const other = lang() === "ko" ? "en" : "ko";
+  $("#pitchTitle").textContent = lang() === "ko" ? "1분 자기소개" : "자기소개 (Tell me about yourself)";
+  $("#pitch").value = profile[`pitch_${lang()}`] || "";
+  $("#pitchOtherLabel").textContent = other === "ko" ? "한국어 버전" : "영어 버전";
+  $("#pitchOther").textContent = profile[`pitch_${other}`] || "";
+  const missingKo = lang() === "ko" && profile.stories.some((s) => !s.answer_ko);
+  $("#koMissing").classList.toggle("hidden", !missingKo);
   $("#jobDesc").value ||= profile.job_description || "";
   const wrap = $("#stories");
   wrap.innerHTML = "";
@@ -232,24 +246,39 @@ function renderProfile() {
     node.querySelector(".title-ko").textContent = s.title_ko;
     node.querySelector(".title").textContent = s.title;
     node.querySelector(".kw").innerHTML = s.keywords.map((k) => `<span>${escapeHtml(k)}</span>`).join("");
-    node.querySelector(".answer-en").value = s.answer_en;
+    node.querySelector(".answer").value = s[`answer_${lang()}`] || "";
     node.querySelector(".star").innerHTML = ["situation", "task", "action", "result"]
       .map((k) => `<dt>${k[0].toUpperCase() + k.slice(1)}</dt><dd>${escapeHtml(s[k])}</dd>`)
       .join("");
     node.querySelector(".fits").innerHTML = s.fits.map((f) => `<li>${escapeHtml(f)}</li>`).join("");
-    node.querySelector(".speak").addEventListener("click", () => speak(card.querySelector(".answer-en").value));
+    node.querySelector(".speak").addEventListener("click", () => speak(card.querySelector(".answer").value));
     wrap.appendChild(node);
   }
   updatePracticeReady();
 }
 
-document.querySelector('[data-speak="pitch_en"]').addEventListener("click", () => speak($("#pitchEn").value));
+document.querySelector("#speakPitch").addEventListener("click", () => speak($("#pitch").value));
+
+$("#makeKo").addEventListener("click", async () => {
+  $("#makeKo").disabled = true;
+  $("#koState").textContent = "한국어 답변을 만드는 중이에요… (30초~1분)";
+  try {
+    profile = await addKoreanAnswers(profile);
+    saveProfile();
+    renderProfile();
+    $("#koState").textContent = "";
+  } catch (err) {
+    $("#koState").textContent = `실패: ${err.message}`;
+  } finally {
+    $("#makeKo").disabled = false;
+  }
+});
 
 $("#saveProfile").addEventListener("click", async () => {
-  profile.pitch_en = $("#pitchEn").value;
+  profile[`pitch_${lang()}`] = $("#pitch").value;
   for (const card of document.querySelectorAll(".story")) {
     const s = profile.stories.find((x) => x.id === card.dataset.id);
-    s.answer_en = card.querySelector(".answer-en").value;
+    s[`answer_${lang()}`] = card.querySelector(".answer").value;
   }
   saveProfile();
   $("#saveState").textContent = "저장했어요.";
@@ -297,7 +326,7 @@ $("#nextQ").addEventListener("click", async () => {
   $("#question").textContent = "…";
   try {
     currentQ = (
-      await askQuestion(profile, { asked, lastAnswer: asked.length ? lastAnswer : "", focus: $("#focus").value }, (t) => ($("#question").textContent = t))
+      await askQuestion(profile, { asked, lastAnswer: asked.length ? lastAnswer : "", focus: $("#focus").value, lang: lang() }, (t) => ($("#question").textContent = t))
     ).trim();
     asked.push(currentQ);
     speak(currentQ, $("#slowVoice").checked);
@@ -322,7 +351,7 @@ function startRecording() {
   if (!SR) return alert("이 브라우저는 음성 인식을 지원하지 않아요. Chrome을 쓰거나 답변을 직접 입력해 주세요.");
   stopSpeaking();
   recog = new SR();
-  recog.lang = "en-US";
+  recog.lang = speechLang();
   recog.continuous = true;
   recog.interimResults = true;
   const base = $("#answer").value ? `${$("#answer").value.trim()} ` : "";
@@ -365,7 +394,7 @@ $("#feedbackBtn").addEventListener("click", async () => {
   $("#feedback").textContent = "피드백을 쓰는 중…";
   $("#feedbackBtn").disabled = true;
   try {
-    await getFeedback(profile, { question: currentQ, answer: lastAnswer }, (t) => ($("#feedback").innerHTML = renderFeedback(t)));
+    await getFeedback(profile, { question: currentQ, answer: lastAnswer, lang: lang() }, (t) => ($("#feedback").innerHTML = renderFeedback(t)));
   } catch (err) {
     $("#feedback").textContent = `오류: ${err.message}`;
   } finally {
@@ -381,9 +410,7 @@ const channels = []; // { speaker, stream, socket, recorder, parts }
 const history = []; // { speaker, text }
 let hintAbort = null;
 
-const liveLang = () => $("#liveLang").value;
-$("#liveLang").value = read("ic.liveLang") || "ko";
-$("#liveLang").addEventListener("change", (e) => write("ic.liveLang", e.target.value));
+const liveLang = lang;
 
 function addTranscript(speaker, text) {
   history.push({ speaker, text });
@@ -530,7 +557,7 @@ $("#liveStart").addEventListener("click", async () => {
   $("#hintQ").textContent = `듣는 중… (${liveLang() === "ko" ? "한국어" : "영어"}) 면접관의 질문을 기다리고 있어요.`;
 
   $("#liveStart").disabled = true;
-  $("#liveLang").disabled = true;
+  $("#lang").disabled = true;
   $("#listenMe").disabled = true;
   $("#liveStop").disabled = false;
   $("#forceHint").disabled = false;
@@ -546,7 +573,7 @@ function stopLive() {
   }
   hintAbort?.abort();
   $("#liveStart").disabled = false;
-  $("#liveLang").disabled = false;
+  $("#lang").disabled = false;
   $("#listenMe").disabled = false;
   $("#liveStop").disabled = true;
   $("#forceHint").disabled = true;
@@ -586,10 +613,23 @@ $("#popout").addEventListener("click", async () => {
 // Retry progress shows in the same floating pill used for voice playback.
 onGeminiStatus((text) => setVoiceState(text ? `⏳ ${text}` : ""));
 
+// ---------- interview language ----------
+
+function applyLanguage() {
+  $("#lang").value = lang();
+  $("#answer").placeholder = lang() === "ko" ? "답변을 말하거나 입력하세요…" : "Your answer...";
+  fillVoiceSelects();
+  renderProfile();
+}
+$("#lang").addEventListener("change", (e) => {
+  write("ic.lang", e.target.value);
+  applyLanguage();
+});
+
 // ---------- boot ----------
 
 renderStatus();
 profile = loadProfile();
-renderProfile();
+applyLanguage();
 updatePracticeReady();
 if (!keys.gemini) showTab("settings");

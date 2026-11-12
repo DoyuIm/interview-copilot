@@ -42,13 +42,14 @@ function profileContext(profile) {
       (s) =>
         `[${s.id}] ${s.title}\n` +
         `Situation: ${s.situation}\nTask: ${s.task}\nAction: ${s.action}\nResult: ${s.result}\n` +
-        `Keywords: ${s.keywords.join(", ")}\nPrepared answer: ${s.answer_en}`,
+        `Keywords: ${s.keywords.join(", ")}\nPrepared answer (EN): ${s.answer_en}` +
+        (s.answer_ko ? `\nPrepared answer (KO): ${s.answer_ko}` : ""),
     )
     .join("\n\n");
   return (
     `CANDIDATE PROFILE\nTarget role: ${profile.target_role}\n` +
     `Job description: ${profile.job_description || "(not provided)"}\n\n` +
-    `Self-introduction: ${profile.pitch_en}\n\nSTORIES\n${stories}`
+    `Self-introduction (EN): ${profile.pitch_en}\nSelf-introduction (KO): ${profile.pitch_ko}\n\nSTORIES\n${stories}`
   );
 }
 
@@ -66,7 +67,7 @@ const STORY_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "title", "title_ko", "situation", "task", "action", "result", "keywords", "answer_en", "fits"],
+        required: ["id", "title", "title_ko", "situation", "task", "action", "result", "keywords", "answer_en", "answer_ko", "fits"],
         properties: {
           id: { type: "string" },
           title: { type: "string" },
@@ -77,6 +78,7 @@ const STORY_SCHEMA = {
           result: { type: "string" },
           keywords: { type: "array", items: { type: "string" } },
           answer_en: { type: "string" },
+          answer_ko: { type: "string" },
           fits: { type: "array", items: { type: "string" } },
         },
       },
@@ -84,26 +86,50 @@ const STORY_SCHEMA = {
   },
 };
 
-const EXTRACT_SYSTEM = `You help a Korean job seeker prepare for an English-language job interview.
+const EXTRACT_SYSTEM = `You help a Korean job seeker prepare for job interviews held in English or in Korean.
 You receive their resume or portfolio (usually in Korean) and optionally a job description.
 
 Turn it into interview-ready material:
 - Find 5 to 8 distinct experiences that make good behavioral-interview stories (projects, problems solved, conflicts, failures, leadership, learning something fast).
 - For each, write Situation / Task / Action / Result in English. Use only facts that are in the source. Do not invent numbers, company names or outcomes; if a result has no number, describe it qualitatively.
 - "answer_en" is what the candidate will actually say out loud: 60-90 seconds, first person, short sentences, common words (CEFR B1-B2), no idioms. It must sound natural when spoken by a non-native speaker.
+- "answer_ko" is the same story as a Korean interview answer: about 1 minute, first person, 습니다체, short sentences, natural spoken Korean (not a word-for-word translation of answer_en), same facts only.
 - "keywords": 3-5 short English cue words that would remind the candidate of the whole story.
 - "fits": the common interview questions this story answers well (e.g. "Tell me about a challenge you faced").
 - "title_ko": a short Korean label so the candidate recognizes the story at a glance.
 - "id": short lowercase slug, unique.
-- "pitch_en": a 45-60 second "Tell me about yourself" answer in the same plain style; "pitch_ko" is its Korean translation.
+- "pitch_en": a 45-60 second "Tell me about yourself" answer in the same plain style; "pitch_ko" is the Korean self-introduction ("1분 자기소개"), written as natural spoken Korean in 습니다체, same facts.
 - "target_role": the role they are applying for (from the job description, or inferred from the resume).`;
 
-const INTERVIEWER_SYSTEM = `You are a friendly but realistic interviewer at a company hiring for the candidate's target role.
+function interviewerSystem(lang) {
+  if (lang === "ko") {
+    return `You are a friendly but realistic interviewer at a Korean company hiring for the candidate's target role.
+Ask exactly one interview question in natural spoken Korean (존댓말), 1-2 sentences. Output only the question.
+Mix experience questions ("~했던 경험을 말씀해 주세요"), role-specific questions, and motivation questions (지원 동기, 입사 후 포부).
+Do not repeat a question that was already asked. If a follow-up (꼬리 질문) on the previous answer would be natural, you may ask one.`;
+  }
+  return `You are a friendly but realistic interviewer at a company hiring for the candidate's target role.
 Ask exactly one interview question, in clear spoken English, 1-2 sentences. Output only the question.
 Mix behavioral questions ("Tell me about a time...") with role-specific and motivation questions.
 Do not repeat a question that was already asked. If a follow-up on the previous answer would be natural, you may ask one.`;
+}
 
-const COACH_SYSTEM = `You are an English interview coach for a Korean job seeker. Write your feedback in Korean, but keep every English example in English.
+function coachSystem(lang) {
+  if (lang === "ko") {
+    return `You are a Korean job-interview coach. The candidate answered in Korean. Write all feedback in Korean.
+Be encouraging and concrete. The answer is a speech-to-text transcript, so ignore missing punctuation and small recognition errors.
+
+Use exactly these sections, as plain text with the headings shown:
+## 잘한 점
+(1-2 bullets)
+## 고칠 표현
+(up to 4 bullets in the form: "원래 표현" → "더 나은 표현" — 이유 한 줄. Focus on filler words (음, 그, 약간), casual speech, long run-on sentences and vague claims.)
+## 구조 (STAR)
+(Which of 상황 / 과제 / 행동 / 결과 was missing or weak, in 1-3 bullets)
+## 이렇게 말해 보세요
+(A better Korean answer the candidate can actually say: about 1 minute, 습니다체, short sentences, based ONLY on the candidate's real stories in the profile. Name the story id you used in brackets at the start.)`;
+  }
+  return `You are an English interview coach for a Korean job seeker. Write your feedback in Korean, but keep every English example in English.
 Be encouraging and concrete. The candidate's answer is a speech-to-text transcript, so ignore missing punctuation and small recognition errors.
 
 Use exactly these sections, as plain text with the headings shown:
@@ -115,6 +141,7 @@ Use exactly these sections, as plain text with the headings shown:
 (Which of Situation / Task / Action / Result was missing or weak, in 1-3 bullets)
 ## 이렇게 말해 보세요
 (A better English answer the candidate can actually say: 60-90 seconds, short sentences, B1-B2 words, based ONLY on the candidate's real stories in the profile. Name the story id you used in brackets at the start.)`;
+}
 
 // Lines in the live transcript start with these labels.
 export const SPEAKER = { interviewer: "면접관", me: "나" };
@@ -257,19 +284,61 @@ export async function buildProfile({ text, pdfs, jobDescription }) {
   return { ...parsed, job_description: jobDescription || "", updated_at: new Date().toISOString() };
 }
 
-export function askQuestion(profile, { asked = [], lastAnswer = "", focus = "" }, onText) {
+const KO_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["answers"],
+  properties: {
+    answers: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "answer_ko"],
+        properties: { id: { type: "string" }, answer_ko: { type: "string" } },
+      },
+    },
+  },
+};
+
+/** Profiles made before Korean answers existed: write answer_ko for the stories that lack one. */
+export async function addKoreanAnswers(profile) {
+  const missing = profile.stories.filter((s) => !s.answer_ko);
+  if (!missing.length) return profile;
+  const res = await callGemini("generateContent", {
+    systemInstruction: {
+      parts: [
+        {
+          text: `For each story, write "answer_ko": the same story as a Korean job-interview answer. About 1 minute, first person, 습니다체, short sentences, natural spoken Korean (not a word-for-word translation). Use only the facts given; do not invent numbers, names or outcomes. Keep each id unchanged.`,
+        },
+      ],
+    },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: JSON.stringify(missing.map(({ id, title, situation, task, action, result, answer_en }) => ({ id, title, situation, task, action, result, answer_en }))) }],
+      },
+    ],
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: KO_SCHEMA, maxOutputTokens: 16000 },
+  });
+  const { answers } = JSON.parse(textOf(await res.json()));
+  const byId = new Map(answers.map((a) => [a.id, a.answer_ko]));
+  return { ...profile, stories: profile.stories.map((s) => (s.answer_ko || !byId.has(s.id) ? s : { ...s, answer_ko: byId.get(s.id) })) };
+}
+
+export function askQuestion(profile, { asked = [], lastAnswer = "", focus = "", lang = "ko" }, onText) {
   const prompt =
     `Questions already asked:\n${asked.map((q) => `- ${q}`).join("\n") || "(none - this is the first question)"}\n\n` +
     (lastAnswer ? `Candidate's last answer:\n${lastAnswer}\n\n` : "") +
     (focus ? `Focus area requested by the candidate: ${focus}\n\n` : "") +
     "Ask the next question.";
-  return streamText({ system: [INTERVIEWER_SYSTEM, profileContext(profile)], prompt }, onText);
+  return streamText({ system: [interviewerSystem(lang), profileContext(profile)], prompt }, onText);
 }
 
-export function getFeedback(profile, { question, answer }, onText) {
+export function getFeedback(profile, { question, answer, lang = "ko" }, onText) {
   return streamText(
     {
-      system: [COACH_SYSTEM, profileContext(profile)],
+      system: [coachSystem(lang), profileContext(profile)],
       prompt: `Interview question: ${question}\n\nMy answer (transcript): ${answer || "(no answer)"}`,
       maxTokens: 8000,
     },
