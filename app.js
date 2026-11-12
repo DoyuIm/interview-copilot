@@ -190,12 +190,57 @@ function formatSize(bytes) {
   return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.ceil(bytes / 1024)}KB`;
 }
 
-$("#resumeFile").addEventListener("change", () => {
-  const files = [...$("#resumeFile").files];
-  const total = files.reduce((n, f) => n + f.size, 0);
+// Job posting attachments live in an array (not the input) so pasted screenshots can join picked files.
+const jobAttachments = [];
+const JOB_INLINE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
+
+function renderFileLists() {
+  const resumes = [...$("#resumeFile").files];
+  const total = [...resumes, ...jobAttachments].reduce((n, f) => n + f.size, 0);
+  const warn =
+    total > MAX_TOTAL_BYTES
+      ? `<li class="warn">이력서와 공고 파일 합계 ${formatSize(total)}: 18MB를 넘으면 실패할 수 있어요. 큰 파일은 빼거나 텍스트로 붙여넣어 주세요.</li>`
+      : "";
   $("#fileList").innerHTML =
-    files.map((f) => `<li><span>${escapeHtml(f.name)}</span><span class="muted">${formatSize(f.size)}</span></li>`).join("") +
-    (total > MAX_TOTAL_BYTES ? `<li class="warn">합계 ${formatSize(total)}: 18MB를 넘으면 실패할 수 있어요. 큰 파일은 빼거나 텍스트로 붙여넣어 주세요.</li>` : "");
+    resumes.map((f) => `<li><span>${escapeHtml(f.name)}</span><span class="muted">${formatSize(f.size)}</span></li>`).join("") + warn;
+  $("#jobFileList").innerHTML = jobAttachments
+    .map(
+      (f, i) =>
+        `<li><span>${escapeHtml(f.name)}</span><span class="muted">${formatSize(f.size)} <button class="remove" data-i="${i}" title="빼기" aria-label="${escapeHtml(f.name)} 빼기">×</button></span></li>`,
+    )
+    .join("");
+}
+
+function addJobFiles(files) {
+  const skipped = [];
+  for (const f of files) {
+    if (JOB_INLINE_TYPES.includes(f.type) || /\.(txt|md)$/i.test(f.name)) jobAttachments.push(f);
+    else skipped.push(f.name);
+  }
+  renderFileLists();
+  $("#importState").textContent = skipped.length
+    ? `${skipped.join(", ")}: 지원하지 않는 형식이라 뺐어요. PDF나 이미지로 저장해서 올려 주세요.`
+    : "";
+}
+
+$("#resumeFile").addEventListener("change", renderFileLists);
+$("#jobFiles").addEventListener("change", (e) => {
+  addJobFiles([...e.target.files]);
+  e.target.value = "";
+});
+$("#jobFileList").addEventListener("click", (e) => {
+  const i = e.target.closest(".remove")?.dataset.i;
+  if (i === undefined) return;
+  jobAttachments.splice(Number(i), 1);
+  renderFileLists();
+});
+// A screenshot of the posting can be pasted straight into the text box.
+$("#jobDesc").addEventListener("paste", (e) => {
+  const images = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+  if (!images.length) return;
+  e.preventDefault();
+  const stamp = new Date().toTimeString().slice(0, 8).replaceAll(":", "");
+  addJobFiles(images.map((f, k) => new File([f], `붙여넣은 공고 이미지 ${stamp}${k ? `-${k}` : ""}.png`, { type: f.type })));
 });
 
 $("#importBtn").addEventListener("click", async () => {
@@ -209,11 +254,18 @@ $("#importBtn").addEventListener("click", async () => {
   const pasted = $("#resumeText").value.trim();
   if (pasted) textParts.push(`--- 붙여넣은 텍스트 ---\n${pasted}`);
   const text = textParts.join("\n\n");
+  const jobFiles = [];
+  const jobTexts = [];
+  for (const file of jobAttachments) {
+    if (JOB_INLINE_TYPES.includes(file.type)) jobFiles.push({ name: file.name, mimeType: file.type, data: await fileToBase64(file) });
+    else jobTexts.push(`--- ${file.name} ---\n${await file.text()}`);
+  }
+  const jobDescription = [$("#jobDesc").value.trim(), ...jobTexts].filter(Boolean).join("\n\n");
   if (!text && !pdfs.length) return ($("#importState").textContent = "PDF를 올리거나 텍스트를 붙여넣어 주세요.");
   $("#importBtn").disabled = true;
-  $("#importState").textContent = `자료 ${files.length || 1}개를 읽고 스토리를 만드는 중이에요… (1~3분)`;
+  $("#importState").textContent = `자료 ${files.length + jobAttachments.length || 1}개를 읽고 스토리를 만드는 중이에요… (1~3분)`;
   try {
-    profile = await buildProfile({ text, pdfs, jobDescription: $("#jobDesc").value.trim() });
+    profile = await buildProfile({ text, pdfs, jobDescription, jobFiles });
     saveProfile();
     renderProfile();
     $("#importState").textContent = `스토리 ${profile.stories.length}개를 만들었어요. 아래에서 다듬어 보세요.`;

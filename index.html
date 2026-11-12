@@ -86,8 +86,12 @@
           <textarea id="resumeText" rows="6" placeholder="경력, 프로젝트, 성과를 자유롭게 붙여넣으세요"></textarea>
         </label>
         <label class="field">지원 공고 (선택, 영어/한국어 모두 가능)
-          <textarea id="jobDesc" rows="4" placeholder="Job description을 붙여넣으면 질문과 답변이 그 직무에 맞춰져요"></textarea>
+          <textarea id="jobDesc" rows="4" placeholder="Job description을 붙여넣으면 질문과 답변이 그 직무에 맞춰져요. 공고 캡처 이미지는 여기에 바로 붙여넣어도(⌘V) 돼요."></textarea>
         </label>
+        <label class="field">지원 공고 파일 (선택, 여러 개 가능: PDF, 이미지, TXT)
+          <input type="file" id="jobFiles" accept="application/pdf,image/png,image/jpeg,image/webp,.txt,.md" multiple />
+        </label>
+        <ul id="jobFileList" class="file-list"></ul>
         <div class="row">
           <button id="importBtn" class="primary">스토리 만들기</button>
           <label class="ghost file-btn">저장한 스토리 파일 불러오기<input type="file" id="importProfile" accept="application/json,.json" hidden /></label>

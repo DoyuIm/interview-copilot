@@ -57,9 +57,10 @@ function profileContext(profile) {
 const STORY_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["target_role", "pitch_en", "pitch_ko", "stories"],
+  required: ["target_role", "job_description", "pitch_en", "pitch_ko", "stories"],
   properties: {
     target_role: { type: "string" },
+    job_description: { type: "string" },
     pitch_en: { type: "string" },
     pitch_ko: { type: "string" },
     stories: {
@@ -99,6 +100,7 @@ Turn it into interview-ready material:
 - "title_ko": a short Korean label so the candidate recognizes the story at a glance.
 - "id": short lowercase slug, unique.
 - "pitch_en": a 45-60 second "Tell me about yourself" answer in the same plain style; "pitch_ko" is the Korean self-introduction ("1분 자기소개"), written as natural spoken Korean in 습니다체, same facts.
+- "job_description": the job posting as plain text in its original language (from the pasted text and any attached posting files or screenshots): role, main tasks, requirements, preferred qualifications. Shorten to about 1,500 characters if it is longer. Empty string if no posting was given.
 - "target_role": the role they are applying for (from the job description, or inferred from the resume).`;
 
 function interviewerSystem(lang) {
@@ -263,15 +265,21 @@ async function streamText({ system, prompt, maxTokens = 4000 }, onText, signal) 
 // ---------- app actions ----------
 
 /** files: [{ name, data(base64) }] PDFs; text: pasted/plain-text material. */
-export async function buildProfile({ text, pdfs, jobDescription }) {
+/** pdfs: resume PDFs [{ name, data }]; jobFiles: job posting PDFs or images [{ name, mimeType, data }]. */
+export async function buildProfile({ text, pdfs, jobDescription, jobFiles = [] }) {
   const parts = [];
   for (const pdf of pdfs) {
     parts.push({ text: `File: ${pdf.name}` });
     parts.push({ inlineData: { mimeType: "application/pdf", data: pdf.data } });
   }
+  for (const f of jobFiles) {
+    parts.push({ text: `Job posting file: ${f.name}` });
+    parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } });
+  }
   parts.push({
     text:
-      (pdfs.length ? `The ${pdfs.length} attached file(s) above are the candidate materials. Combine them into one picture of the candidate; if two files describe the same project, merge them into one story.\n\n` : "") +
+      (jobFiles.length ? `Files labelled "Job posting file" are the job posting, not the candidate's materials.\n\n` : "") +
+      (pdfs.length ? `The ${pdfs.length} attached resume/portfolio file(s) above are the candidate materials. Combine them into one picture of the candidate; if two files describe the same project, merge them into one story.\n\n` : "") +
       (text ? `RESUME / PORTFOLIO TEXT:\n${text}\n\n` : "") +
       `JOB DESCRIPTION:\n${jobDescription || "(not provided)"}`,
   });
@@ -281,7 +289,7 @@ export async function buildProfile({ text, pdfs, jobDescription }) {
     generationConfig: { responseMimeType: "application/json", responseJsonSchema: STORY_SCHEMA, maxOutputTokens: 32000 },
   });
   const parsed = JSON.parse(textOf(await res.json()));
-  return { ...parsed, job_description: jobDescription || "", updated_at: new Date().toISOString() };
+  return { ...parsed, job_description: parsed.job_description || jobDescription || "", updated_at: new Date().toISOString() };
 }
 
 const KO_SCHEMA = {
